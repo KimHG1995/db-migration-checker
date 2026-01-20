@@ -313,6 +313,7 @@ def main():
             "대상": {"호스트": dst.host, "포트": dst.port, "DB": dst.database, "사용자": dst.user},
             "해시_모드": args.hash_mode,
         },
+        "불일치": {},
         "요약": {},
         "테이블": {},
         "오류": [],
@@ -343,6 +344,11 @@ def main():
         rowcount_mismatch = 0
         hash_mismatch = 0
 
+        ddl_mismatch_tables: List[str] = []
+        idx_mismatch_tables: List[str] = []
+        rowcount_mismatch_tables: List[str] = []
+        hash_mismatch_tables: List[str] = []
+
         for t in tables:
             entry = {
                 "대상_존재": t in dst_tables,
@@ -371,6 +377,7 @@ def main():
                 entry["DDL"]["일치"] = (src_ddl == dst_ddl)
                 if not entry["DDL"]["일치"]:
                     ddl_mismatch += 1
+                    ddl_mismatch_tables.append(t)
             except Exception as e:
                 entry["DDL"]["일치"] = None
                 report["오류"].append({"테이블": t, "단계": "DDL", "오류": str(e)})
@@ -384,6 +391,7 @@ def main():
                 entry["인덱스"]["일치"] = (src_idx == dst_idx)
                 if not entry["인덱스"]["일치"]:
                     idx_mismatch += 1
+                    idx_mismatch_tables.append(t)
             except Exception as e:
                 entry["인덱스"]["일치"] = None
                 report["오류"].append({"테이블": t, "단계": "인덱스", "오류": str(e)})
@@ -397,6 +405,7 @@ def main():
                 entry["행수"]["일치"] = (src_cnt == dst_cnt)
                 if not entry["행수"]["일치"]:
                     rowcount_mismatch += 1
+                    rowcount_mismatch_tables.append(t)
             except Exception as e:
                 entry["행수"]["일치"] = None
                 report["오류"].append({"테이블": t, "단계": "행수", "오류": str(e)})
@@ -411,6 +420,7 @@ def main():
                         entry["해시"]["일치"] = (src_h == dst_h)
                         if not entry["해시"]["일치"]:
                             hash_mismatch += 1
+                            hash_mismatch_tables.append(t)
 
                     elif args.hash_mode == "pk-range":
                         pk = args.hash_pk or detect_primary_key(src_conn, src.database, t)
@@ -436,6 +446,7 @@ def main():
                                     }
                                     entry["해시"]["일치"] = False
                                     hash_mismatch += 1
+                                    hash_mismatch_tables.append(t)
                                 else:
                                     ranges = chunk_ranges(int(smin), int(smax), args.hash_chunk_size)
                                     mismatches = []
@@ -453,11 +464,23 @@ def main():
                                     entry["해시"]["일치"] = (len(mismatches) == 0)
                                     if not entry["해시"]["일치"]:
                                         hash_mismatch += 1
+                                        hash_mismatch_tables.append(t)
                 except Exception as e:
                     entry["해시"]["일치"] = None
                     report["오류"].append({"테이블": t, "단계": "해시", "오류": str(e)})
 
             report["테이블"][t] = entry
+
+        report["불일치"] = {
+            "테이블_전체": sorted(
+                set(ddl_mismatch_tables + idx_mismatch_tables + rowcount_mismatch_tables + hash_mismatch_tables)
+            ),
+            "DDL": sorted(set(ddl_mismatch_tables)),
+            "인덱스": sorted(set(idx_mismatch_tables)),
+            "행수": sorted(set(rowcount_mismatch_tables)),
+            "해시": sorted(set(hash_mismatch_tables)) if args.hash_mode != "off" else [],
+            "대상_누락": missing_in_dst,
+        }
 
         report["요약"].update({
             "DDL_불일치_테이블": ddl_mismatch,
@@ -472,6 +495,7 @@ def main():
 
         print(f"[완료] 리포트 저장: {args.out}")
         print(json.dumps(report["요약"], ensure_ascii=False, indent=2))
+        print(json.dumps(report["불일치"], ensure_ascii=False, indent=2))
 
         # CI 친화적 종료 코드:
         # 0 = 이상 없음, 1 = 불일치 존재, 2 = 치명적 오류
